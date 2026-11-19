@@ -71,7 +71,7 @@ excludes = [
 ]
 
 # 输出目录名（改这里可同时切换 EXE 名与精简路径，便于绕开被占用的旧目录）
-APP_NAME = "StudyFloat_v2"
+APP_NAME = "StudyFloat_v3"
 
 a = Analysis(
     ["app/main.py"],

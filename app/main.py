@@ -10,8 +10,10 @@ from app.config import Config
 from app.player.errors import ParseError, PlayerStartError, StudyFloatError
 from app.player.mpv_controller import MpvController
 from app.source.bilibili_parser import BilibiliParser
+from app.source.bilibili_parts import fetch_parts, is_multi_part, pick_part_url
 from app.source.url_validator import InvalidUrl, normalize_url
 from app.ui.launcher import Launcher
+from app.ui.part_picker_dialog import PartPickerDialog
 from app.ui.qr_login_dialog import QRLoginDialog
 from app.window.geometry import geometry_for_preset, load_geometry, save_geometry
 
@@ -38,6 +40,37 @@ def effective_cookie_path(config: Config) -> str:
     return config.cookie_path
 
 
+def _extract_bvid(url: str) -> str:
+    """从规范化 URL 里取 BV 号。"""
+    import re
+    m = re.search(r"(BV[0-9A-Za-z]{10})", url)
+    return m.group(1) if m else ""
+
+
+def resolve_part(url: str, raw: str, parent) -> str | None:
+    """合辑处理：链接已带 p=N 则直接用；否则弹分P选择框。
+
+    返回最终要解析的 URL；用户取消返回 None。
+    """
+    # 用户明确指定了分P（如 &p=18），尊重其意图，直接播放。
+    from urllib.parse import parse_qs, urlparse
+    if parse_qs(urlparse(raw).query).get("p"):
+        return url
+    bvid = _extract_bvid(url)
+    if not bvid:
+        return url
+    try:
+        parts = fetch_parts(bvid)
+    except Exception:
+        return url  # 拿不到分P列表时退回原 URL，不让登录/网络问题阻断播放
+    if not is_multi_part(parts):
+        return url
+    dialog = PartPickerDialog(parts, parent=parent)
+    if dialog.exec() and dialog.selected_part is not None:
+        return pick_part_url(url, dialog.selected_part)
+    return None  # 用户取消
+
+
 def main() -> None:
     app = QApplication(sys.argv)
     config = Config.load(data_path("config.json"))
@@ -50,6 +83,12 @@ def main() -> None:
             url = normalize_url(raw)
         except InvalidUrl as exc:
             window.show_error(str(exc))
+            return
+
+        # 合辑：让用户选择分P（链接已带 p=N 则跳过）
+        url = resolve_part(url, raw, window)
+        if url is None:
+            window.clear_error()
             return
 
         window.show_error("正在解析视频…")
