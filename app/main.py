@@ -12,6 +12,7 @@ from app.player.mpv_controller import MpvController
 from app.source.bilibili_parser import BilibiliParser
 from app.source.url_validator import InvalidUrl, normalize_url
 from app.ui.launcher import Launcher
+from app.ui.qr_login_dialog import QRLoginDialog
 from app.window.geometry import geometry_for_preset, load_geometry, save_geometry
 
 
@@ -24,6 +25,17 @@ def data_path(name: str) -> Path:
     """Settings/config files live beside the executable (or cwd in dev)."""
     base = Path(sys.executable).parent if getattr(sys, "frozen", False) else Path.cwd()
     return base / name
+
+
+QR_COOKIE_FILE = "qr_cookies.txt"
+
+
+def effective_cookie_path(config: Config) -> str:
+    """扫码保存的登录态优先，其次手动设置的 cookie 文件。"""
+    qr = data_path(QR_COOKIE_FILE)
+    if qr.is_file():
+        return str(qr)
+    return config.cookie_path
 
 
 def main() -> None:
@@ -43,7 +55,7 @@ def main() -> None:
         window.show_error("正在解析视频…")
         QApplication.processEvents()
 
-        parser = BilibiliParser(config.cookie_path)
+        parser = BilibiliParser(effective_cookie_path(config))
         try:
             stream = parser.parse(url)
         except ParseError as exc:
@@ -125,7 +137,18 @@ def main() -> None:
         window.clear_error()
         window.showMinimized()
 
+    def on_login():
+        dialog = QRLoginDialog(str(data_path(QR_COOKIE_FILE)), window)
+        if dialog.exec():
+            window.show_login_status("已登录，播放时自动使用登录态")
+        else:
+            # 失败详情已在对话框内显示；这里只给一句简短提示
+            window.show_login_status("扫码未完成，可稍后重试", is_error=True)
+
     window.play_requested.connect(on_play)
+    window.login_requested.connect(on_login)
+    if data_path(QR_COOKIE_FILE).is_file():
+        window.show_login_status("已登录（扫码登录态有效）")
     window.show()
     sys.exit(app.exec())
 

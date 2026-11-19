@@ -19,6 +19,8 @@ class Launcher(QWidget):
     """Minimal URL input window. Emits play_requested when the user clicks Play."""
 
     play_requested = Signal(str)
+    login_requested = Signal()
+    login_status = Signal(str, bool)  # message, is_error
 
     def __init__(self, config: Config):
         super().__init__()
@@ -37,13 +39,20 @@ class Launcher(QWidget):
         self.error.setStyleSheet("color: #c62828;")
         self.error.setWordWrap(True)
         layout.addWidget(self.error)
+        self.login_label = QLabel("")
+        self.login_label.setStyleSheet("color: #2e7d32;")
+        self.login_label.setWordWrap(True)
+        layout.addWidget(self.login_label)
         row = QHBoxLayout()
         play = QPushButton("播放")
         play.clicked.connect(self._emit_play)
         settings = QPushButton("设置")
         settings.clicked.connect(self._open_settings)
+        login = QPushButton("扫码登录")
+        login.clicked.connect(lambda: self.login_requested.emit())
         row.addWidget(play)
         row.addWidget(settings)
+        row.addWidget(login)
         layout.addLayout(row)
         self.url.setFocus()
 
@@ -52,6 +61,12 @@ class Launcher(QWidget):
 
     def clear_error(self):
         self.error.setText("")
+
+    def show_login_status(self, message: str, is_error: bool = False):
+        self.login_label.setText(message)
+        self.login_label.setStyleSheet(
+            "color: #c62828;" if is_error else "color: #2e7d32;"
+        )
 
     def _emit_play(self):
         self.clear_error()

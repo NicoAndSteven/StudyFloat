@@ -20,7 +20,17 @@ hiddenimports += [
     "PySide6.QtCore",
     "PySide6.QtGui",
     "PySide6.QtWidgets",
+    "curl_cffi",
+    "curl_cffi.requests",
+    "qrcode",
 ]
+
+# curl_cffi ships native libs (libcurl/boringSSL) that must be bundled.
+for pkg in ("curl_cffi", "qrcode"):
+    d, b, h = collect_all(pkg)
+    datas += d
+    binaries += b
+    hiddenimports += h
 
 datas += [
     ("app/player/resources/studyfloat.lua", "app/player/resources"),

@@ -1,4 +1,6 @@
 PySide6>=6.6
 yt-dlp>=2025.1.1
+curl_cffi>=0.11
+qrcode>=8.0
 pytest>=8.0
 pyinstaller>=6.0
