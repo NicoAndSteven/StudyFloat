@@ -10,7 +10,11 @@ from app.config import Config
 from app.player.errors import ParseError, PlayerStartError, StudyFloatError
 from app.player.mpv_controller import MpvController
 from app.source.bilibili_parser import BilibiliParser
-from app.source.bilibili_parts import fetch_parts, is_multi_part, pick_part_url
+from app.source.bilibili_parts import (
+    decide_selection,
+    fetch_parts,
+    pick_part_url,
+)
 from app.source.url_validator import InvalidUrl, normalize_url
 from app.ui.launcher import Launcher
 from app.ui.part_picker_dialog import PartPickerDialog
@@ -48,14 +52,11 @@ def _extract_bvid(url: str) -> str:
 
 
 def resolve_part(url: str, raw: str, parent) -> str | None:
-    """合辑处理：链接已带 p=N 则直接用；否则弹分P选择框。
+    """合辑处理：只要是多P就弹列表（即使带 p=N），默认高亮请求的那一P。
 
-    返回最终要解析的 URL；用户取消返回 None。
+    返回最终要解析的 URL；用户取消返回 None。无 BV 号或拿不到分P列表时
+    退回原 URL，不让登录/网络问题阻断播放。
     """
-    # 用户明确指定了分P（如 &p=18），尊重其意图，直接播放。
-    from urllib.parse import parse_qs, urlparse
-    if parse_qs(urlparse(raw).query).get("p"):
-        return url
     bvid = _extract_bvid(url)
     if not bvid:
         return url
@@ -63,9 +64,12 @@ def resolve_part(url: str, raw: str, parent) -> str | None:
         parts = fetch_parts(bvid)
     except Exception:
         return url  # 拿不到分P列表时退回原 URL，不让登录/网络问题阻断播放
-    if not is_multi_part(parts):
+    selection = decide_selection(parts, raw)
+    if not selection.show_picker:
         return url
-    dialog = PartPickerDialog(parts, parent=parent)
+    dialog = PartPickerDialog(
+        parts, highlight_page=selection.highlight_page, parent=parent
+    )
     if dialog.exec() and dialog.selected_part is not None:
         return pick_part_url(url, dialog.selected_part)
     return None  # 用户取消

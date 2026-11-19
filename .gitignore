@@ -9,3 +9,6 @@ __pycache__/
 .pytest_cache/
 config.json
 geometry.json
+
+# visual brainstorming artifacts
+.superpowers/

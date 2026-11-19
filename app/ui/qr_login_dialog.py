@@ -1,18 +1,17 @@
 """扫码登录对话框：显示二维码 + 后台轮询登录状态。"""
 from __future__ import annotations
 
-import threading
-
 import qrcode
 from PySide6.QtCore import Qt, QThread, Signal, QObject
 from PySide6.QtGui import QColor, QPainter
-from PySide6.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from app.source.bili_login import BiliQRLogin, cookies_to_netscape
+from app.ui.theme import TEXT, TEXT_DIM, TEXT_FAINT, apply_theme, style_secondary_button
 
 
 class _QRWidget(QWidget):
-    """用 QPainter 直接绘制 qrcode 布尔矩阵，无图片/IO 依赖。"""
+    """用 QPainter 直接绘制 qrcode 布尔矩阵，无图片/IO 依赖。白底黑码保证可扫。"""
 
     def __init__(self):
         super().__init__()
@@ -67,21 +66,70 @@ class _LoginWorker(QObject):
             self.failed.emit(str(exc))
 
 
-class QRLoginDialog(QDialog):
-    """模态对话框：显示二维码，扫码成功后自动保存 cookies.txt 并关闭。"""
+class QRLoginDialog(QFrame):
+    """扫码登录窗口：显示二维码，扫码成功自动保存 cookies.txt 并关闭。"""
 
     def __init__(self, cookie_path: str, parent=None):
         super().__init__(parent)
         self.cookie_path = cookie_path
         self.setWindowTitle("StudyFloat 扫码登录")
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setWindowFlag(Qt.WindowStaysOnTopHint, True)
-        self.setModal(True)
-        layout = QVBoxLayout(self)
+        self.setFixedSize(320, 360)
+        self._result = False
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(1, 1, 1, 1)
+        card = QFrame()
+        card.setObjectName("card")
+        outer.addWidget(card)
+
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 18, 20, 20)
+        layout.setSpacing(12)
+
+        head = QLabel("扫码登录")
+        head.setStyleSheet(f"color: {TEXT}; font-size: 16px; font-weight: 700;")
+        head.setAlignment(Qt.AlignCenter)
+        layout.addWidget(head)
+
+        tip = QLabel("用手机 B站 App 扫描二维码并确认")
+        tip.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
+        tip.setAlignment(Qt.AlignCenter)
+        layout.addWidget(tip)
+
+        qr_box = QFrame()
+        qr_box.setFixedSize(258, 258)
+        qr_box.setStyleSheet("background: white; border-radius: 12px;")
+        qr_layout = QVBoxLayout(qr_box)
+        qr_layout.setContentsMargins(9, 9, 9, 9)
         self.qr = _QRWidget()
+        qr_layout.addWidget(self.qr)
+        layout.addWidget(qr_box, 0, Qt.AlignCenter)
+
         self.status = QLabel("正在生成二维码…")
         self.status.setAlignment(Qt.AlignCenter)
-        layout.addWidget(self.qr)
+        self.status.setWordWrap(True)
+        self.status.setStyleSheet(f"color: {TEXT_DIM}; font-size: 11px;")
         layout.addWidget(self.status)
+
+        cancel = QPushButton("取消")
+        cancel.setMinimumHeight(34)
+        style_secondary_button(cancel)
+        cancel.clicked.connect(self.close)
+        layout.addWidget(cancel)
+
+        apply_theme(self)
+        card.setStyleSheet(
+            """
+            QFrame#card {
+                background: #20232b;
+                border: 1px solid #343846;
+                border-radius: 14px;
+            }
+            """
+        )
+        qr_box.setStyleSheet("background: white; border-radius: 12px;")
 
         self._thread = QThread(self)
         self._worker = _LoginWorker(cookie_path)
@@ -93,18 +141,38 @@ class QRLoginDialog(QDialog):
         self._worker.failed.connect(self._on_failed)
         self._thread.start()
 
+    def exec(self):
+        import PySide6.QtCore as _c
+
+        loop = _c.QEventLoop()
+        self._loop = loop
+        self._result = False
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        loop.exec()
+        return self._result
+
+    def _finish(self, accepted: bool):
+        self._result = accepted
+        self.hide()
+        loop = getattr(self, "_loop", None)
+        if loop and loop.isRunning():
+            loop.quit()
+
     def _on_success(self, cookies: dict):
         self.status.setText("登录成功！")
         self._thread.quit()
-        self.accept()
+        self._finish(True)
 
     def _on_failed(self, message: str):
         self.status.setText(f"登录失败：{message}")
         self._thread.quit()
-        self.reject()
+        self._finish(False)
 
     def closeEvent(self, event):
         if self._thread.isRunning():
             self._thread.quit()
             self._thread.wait(2000)
+        self._finish(False)
         super().closeEvent(event)

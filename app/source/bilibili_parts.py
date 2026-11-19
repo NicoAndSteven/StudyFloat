@@ -6,6 +6,7 @@ B站官方 view API 一次返回全部分P元数据（page/cid/标题/时长）�
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlparse
 
 from curl_cffi import requests as cffi_requests
 
@@ -45,6 +46,37 @@ def fetch_parts(bvid: str, timeout: float = 15.0) -> list[PartInfo]:
         for p in pages
     ]
     return sorted(parts, key=lambda x: x.page)
+
+
+@dataclass
+class PartSelection:
+    """分P选择决策结果。show_picker 为是否弹列表；highlight_page 为默认选中的 P。"""
+    show_picker: bool
+    highlight_page: int
+
+
+def requested_page(url: str) -> int | None:
+    """从 URL 的 p 查询参数中提取分P编号（无效/缺失返回 None）。"""
+    try:
+        raw = parse_qs(urlparse(url).query).get("p", [None])[0]
+    except Exception:
+        return None
+    return int(raw) if raw and str(raw).isdigit() else None
+
+
+def decide_selection(parts: list[PartInfo], url: str) -> PartSelection:
+    """决定是否需要弹分P列表，以及默认高亮哪一P。
+
+    合辑（>1 个分P）总是弹列表，即便 URL 带 ?p=N；单P视频直接播放。
+    高亮 URL 里请求的 P；若缺失或越界则默认第一P。
+    """
+    pages = {p.page for p in parts}
+    if not is_multi_part(parts):
+        first = min(pages) if pages else 1
+        return PartSelection(show_picker=False, highlight_page=first)
+    requested = requested_page(url)
+    highlight = requested if requested in pages else (min(pages) if pages else 1)
+    return PartSelection(show_picker=True, highlight_page=highlight)
 
 
 def is_multi_part(parts: list[PartInfo]) -> bool:
