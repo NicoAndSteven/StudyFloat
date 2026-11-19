@@ -70,6 +70,9 @@ excludes = [
     "PIL",
 ]
 
+# 输出目录名（改这里可同时切换 EXE 名与精简路径，便于绕开被占用的旧目录）
+APP_NAME = "StudyFloat_v2"
+
 a = Analysis(
     ["app/main.py"],
     pathex=["."],
@@ -88,7 +91,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name="StudyFloat",
+    name=APP_NAME,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -96,7 +99,7 @@ exe = EXE(
     console=False,
     disable_windowed_traceback=False,
 )
-coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="StudyFloat")
+coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=APP_NAME)
 
 # --- Post-build slimming -------------------------------------------------
 # PyInstaller's PySide6 hook collects more Qt DLLs than we need. Keep only
@@ -104,7 +107,7 @@ coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="StudyFloa
 from pathlib import Path
 import shutil
 
-qt_dir = Path(DISTPATH) / "StudyFloat" / "_internal" / "PySide6"
+qt_dir = Path(DISTPATH) / APP_NAME / "_internal" / "PySide6"
 keep_dlls = {
     "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll",
     "Qt6Svg.dll", "pyside6.abi3.dll", "MSVCP140.dll", "MSVCP140_1.dll",
