@@ -1,0 +1,1 @@
+"""StudyFloat window geometry helpers."""

@@ -1,0 +1,1 @@
+"""StudyFloat application package."""
