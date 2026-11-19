@@ -1,0 +1,11 @@
+# ignore local environment and build outputs
+.venv/
+resources/mpv/
+build/
+dist/
+*.spec.bak
+__pycache__/
+*.pyc
+.pytest_cache/
+config.json
+geometry.json
