@@ -9,6 +9,13 @@ __pycache__/
 .pytest_cache/
 config.json
 geometry.json
+qr_cookies.txt
+
+# local diagnostics / screenshots
+build_v*.log
+studyfloat.log
+win_capture.png
 
 # visual brainstorming artifacts
 .superpowers/
+demo_out/

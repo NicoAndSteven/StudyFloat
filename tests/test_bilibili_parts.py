@@ -73,3 +73,22 @@ def test_fetch_parts_raises_on_api_error():
     with patch("app.source.bilibili_parts._session", session):
         with pytest.raises(RuntimeError, match="啥都木有"):
             fetch_parts("BV1qG41197E4")
+
+
+def test_fetch_parts_closes_owned_session():
+    """正常路径必须显式关闭自建 session，不能留给线程退出时的 __del__。"""
+    session = MagicMock()
+    session.get.return_value = _resp(VIEW_RESPONSE)
+    with patch("app.source.bilibili_parts._new_session", return_value=session):
+        parts = fetch_parts("BV1qG41197E4")
+    assert len(parts) == 3
+    session.close.assert_called_once()
+
+
+def test_fetch_parts_closes_owned_session_on_error():
+    session = MagicMock()
+    session.get.return_value = _resp({"code": -404, "message": "啥都木有"})
+    with patch("app.source.bilibili_parts._new_session", return_value=session):
+        with pytest.raises(RuntimeError):
+            fetch_parts("BV1qG41197E4")
+    session.close.assert_called_once()

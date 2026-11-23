@@ -8,17 +8,22 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlparse
 
-from curl_cffi import requests as cffi_requests
-
 VIEW_API = "https://api.bilibili.com/x/web-interface/view"
 _UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 )
 
-# 模块级 session，便于测试时 patch 替换
-_session = cffi_requests.Session(impersonate="chrome")
-_session.headers.update({"User-Agent": _UA})
+# 仅作为测试/调用方注入点保留；正常路径每次请求自建会话并在同一线程关闭。
+_session = None
+
+
+def _new_session():
+    from curl_cffi import requests as cffi_requests
+
+    session = cffi_requests.Session(impersonate="chrome")
+    session.headers.update({"User-Agent": _UA})
+    return session
 
 
 @dataclass
@@ -30,22 +35,39 @@ class PartInfo:
 
 
 def fetch_parts(bvid: str, timeout: float = 15.0) -> list[PartInfo]:
-    """返回该 BV 视频的全部分P信息，按 page 升序。"""
-    resp = _session.get(VIEW_API, params={"bvid": bvid}, timeout=timeout)
-    data = resp.json()
-    if data.get("code") != 0 or not data.get("data"):
-        raise RuntimeError(data.get("message") or "获取分P列表失败")
-    pages = (data["data"].get("pages") or [])
-    parts = [
-        PartInfo(
-            page=int(p.get("page") or 0),
-            cid=int(p.get("cid") or 0),
-            title=str(p.get("part") or f"P{p.get('page')}"),
-            duration=int(p.get("duration") or 0),
-        )
-        for p in pages
-    ]
-    return sorted(parts, key=lambda x: x.page)
+    """返回该 BV 视频的全部分P信息，按 page 升序。
+
+    每次调用创建并关闭自己的 curl_cffi Session：解析在后台 QThread 里，
+    若把 Session 留在模块全局，它会被下一个线程复用/在别的线程析构，
+    Curl.__del__ 会在 Python 线程退出时触发原生崩溃。显式 close 放在
+    finally，保证 curl_easy_cleanup 与创建发生在同一线程。
+    """
+    session = _session
+    owned = session is None
+    if owned:
+        session = _new_session()
+    try:
+        resp = session.get(VIEW_API, params={"bvid": bvid}, timeout=timeout)
+        data = resp.json()
+        if data.get("code") != 0 or not data.get("data"):
+            raise RuntimeError(data.get("message") or "获取分P列表失败")
+        pages = (data["data"].get("pages") or [])
+        parts = [
+            PartInfo(
+                page=int(p.get("page") or 0),
+                cid=int(p.get("cid") or 0),
+                title=str(p.get("part") or f"P{p.get('page')}"),
+                duration=int(p.get("duration") or 0),
+            )
+            for p in pages
+        ]
+        return sorted(parts, key=lambda x: x.page)
+    finally:
+        if owned:
+            try:
+                session.close()
+            except Exception:
+                pass
 
 
 @dataclass

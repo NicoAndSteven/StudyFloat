@@ -1,10 +1,12 @@
 """扫码登录核心逻辑测试（网络全部 mock，不依赖真实 B站）。"""
 import json
+import threading
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from app.source.bili_login import (
+    LoginCancelled,
     LoginExpired,
     LoginPending,
     LoginResult,
@@ -85,3 +87,24 @@ def test_cookies_to_netscape_format(tmp_path):
     parts = sess_line.split("\t")
     assert parts[0] == ".bilibili.com"
     assert parts[5] == "SESSDATA" and parts[6] == "abc%2F123"
+
+
+def test_login_cancel_event_prevents_all_network_calls():
+    login = BiliQRLogin.__new__(BiliQRLogin)
+    login._session = MagicMock()
+    stop = threading.Event()
+    stop.set()
+    with pytest.raises(LoginCancelled):
+        login.login(on_qr=lambda url: None, stop_event=stop)
+    login._session.get.assert_not_called()
+
+
+def test_close_releases_session_and_is_idempotent():
+    login = BiliQRLogin.__new__(BiliQRLogin)
+    session = MagicMock()
+    login._session = session
+    login.close()
+    session.close.assert_called_once()
+    assert login._session is None
+    login.close()
+    session.close.assert_called_once()

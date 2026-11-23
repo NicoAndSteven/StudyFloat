@@ -7,7 +7,11 @@ portable package small. mpv is a self-contained binary and is bundled whole.
 """
 from PyInstaller.utils.hooks import collect_all, collect_submodules
 
-# yt-dlp dynamically imports its extractors -> collect all of them (~10 MB).
+# yt-dlp dynamically imports its extractors -> collect all of them (~9.5 MB).
+# We deliberately keep them all: lazy_extractors.py imports unrelated extractor
+# modules while resolving some classes, so trimming by hand is brittle. A
+# Bilibili-only native parser is the clean way to drop yt-dlp (see
+# docs/体积优化分析.md).
 datas, binaries, hiddenimports = [], [], []
 ydl_d, ydl_b, ydl_h = collect_all("yt_dlp")
 datas += ydl_d
@@ -64,14 +68,16 @@ excludes = [
     "PySide6.QtTest",
     "PySide6.QtDesigner",
     "PySide6.QtHelp",
+    "PySide6.QtSvg",
     "PySide6.QtSvgWidgets",
+    "PySide6.QtNetwork",
     "matplotlib",
     "numpy",
     "PIL",
 ]
 
 # 输出目录名（改这里可同时切换 EXE 名与精简路径，便于绕开被占用的旧目录）
-APP_NAME = "StudyFloat_v4"
+APP_NAME = "StudyFloat_v8"
 
 a = Analysis(
     ["app/main.py"],
@@ -101,33 +107,9 @@ exe = EXE(
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name=APP_NAME)
 
-# --- Post-build slimming -------------------------------------------------
-# PyInstaller's PySide6 hook collects more Qt DLLs than we need. Keep only
-# QtCore/QtGui/QtWidgets (+ their runtime deps) and drop the rest.
-from pathlib import Path
-import shutil
+# NOTE: do NOT clean the output here. The spec file is evaluated before COLLECT
+# actually writes the bundle, so any cleanup at this point would either be a
+# no-op or touch a stale directory. Run `python tools/slim_build.py` after
+# PyInstaller finishes; `python tools/package.py` then produces the .7z.
 
-qt_dir = Path(DISTPATH) / APP_NAME / "_internal" / "PySide6"
-keep_dlls = {
-    "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "Qt6Network.dll",
-    "Qt6Svg.dll", "pyside6.abi3.dll", "MSVCP140.dll", "MSVCP140_1.dll",
-    "MSVCP140_2.dll", "VCRUNTIME140.dll", "VCRUNTIME140_1.dll",
-}
-if qt_dir.exists():
-    for dll in qt_dir.glob("*.dll"):
-        if dll.name not in keep_dlls:
-            dll.unlink()
-    # Qt translations are unused; platform 'styles'/'imageformats' plugins and
-    # the 'platforms' plugin are required for the GUI to run.
-    trans = qt_dir / "translations"
-    if trans.exists():
-        shutil.rmtree(trans)
-    # Keep only essential plugin folders.
-    plug = qt_dir / "plugins"
-    if plug.exists():
-        keep_plugins = {"platforms", "styles", "imageformats"}
-        for child in list(plug.iterdir()):
-            if child.is_dir() and child.name not in keep_plugins:
-                shutil.rmtree(child)
-print("[StudyFloat] slimmed PySide6 runtime")
 

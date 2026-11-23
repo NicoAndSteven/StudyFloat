@@ -8,9 +8,10 @@
 
 - 技术验证 A（解析）/ B（独立窗口）/ C（IPC 控制）全部通过
 - 端到端实测：解析 → 独立 mpv 播窗 → 分离音频 → 倍速 / 跳转 / 静音 → 关闭，全链路通过
-- **47 个自动化测试全部通过**（`pytest tests -q`）
+- **51 个自动化测试全部通过**（`pytest tests -q`）
 - 扫码登录、合辑分P选择均已实测
-- 当前可用绿色版：`dist/StudyFloat_v4/StudyFloat_v4.exe`（约 217MB）
+- v8 修复解析视频时进程闪退（后台线程 GC 误销毁 Qt 控件、登录线程未确定性退出）
+- 当前可用绿色版：`dist/StudyFloat_v8/StudyFloat_v8.exe`（约 210MB）
 
 > 严格遵循：只用真实 mpv 进程播放真实视频直链，绝无静态界面冒充播放、绝无模拟数据。
 
@@ -18,7 +19,7 @@
 
 - **真正独立的播放器**：播放走独立 `mpv.exe` 进程，不是浏览器画中画，也不是内嵌控件。启动器关闭、浏览器关闭后播放不中断。
 - **极简低干扰窗口**：无边框、无标题栏，保持视频比例；可拖动、可缩放；控制条（mpv 内建 OSC）默认悬停显示、约 2 秒自动隐藏。
-- **深色现代 UI**：启动器、分P选择、扫码登录、设置窗口统一深色现代风格（渐变蓝点缀、圆角卡片），启动器为自绘无边框窗口。
+- **暖夜色调 UI**：暖黑底 + 单一黄铜强调色，启动器、设置、分P、扫码四个窗口共用一套设计令牌（字号 / 圆角 / 间距 / 状态色），设置窗口为左导航 + 右页面的双栏偏好面板。样式代码集中在 `app/ui/theme.py` 与 `app/ui/widgets.py`。
 - **置顶与尺寸记忆**：默认置顶；四档尺寸预设（微型 / 小型 / 标准 / 大型）；窗口位置尺寸自动记忆。
 - **扫码登录**：启动器内扫码，登录态自动保存到程序目录，无需手动导出 / 粘贴 Cookie，也不读取浏览器加密 Cookie。
 - **合辑（多P）支持**：粘贴课程合辑链接（无论是否带 `p=N`）都会弹出深色分P列表供选择，链接里原有的分P会默认高亮。
@@ -37,7 +38,7 @@
 | 分P列表 | B站官方 `view` API | 一次取回全部分P元数据（154P 实测 0.35 秒），不逐个枚举 |
 | 打包 | PyInstaller `--onedir` | 免安装绿色文件夹，无需 Python 环境 |
 
-设计文档：[设计规格](docs/superpowers/specs/2026-11-19-studyfloat-design.md)；实现计划：[P0 计划](docs/superpowers/plans/2026-11-19-studyfloat-p0.md)；验证过程：[验证记录](docs/验证记录.md)。
+设计文档：[设计规格](docs/superpowers/specs/2026-11-19-studyfloat-design.md)；实现计划：[P0 计划](docs/superpowers/plans/2026-11-19-studyfloat-p0.md)；验证过程：[验证记录](docs/验证记录.md)；架构与体积评估：[架构轻量化与包体积](docs/架构轻量化与包体积.md)。
 
 ## 目录结构
 
@@ -45,6 +46,9 @@
 app/
 ├── main.py                      # 入口：输入 → 选P → 解析 → 启动 mpv
 ├── config.py                    # 设置持久化（config.json）
+├── paths.py                     # 程序目录 / 数据目录解析
+├── gc_policy.py                 # 仅主线程执行 Python 循环 GC，防 Qt 跨线程析构
+├── qt_lifecycle.py              # deleteLater 期间的 Python 包装保活
 ├── source/
 │   ├── url_validator.py         # 链接校验与规范化（保留 ?p=N）
 │   ├── bilibili_parser.py       # yt-dlp 解析 → StreamInfo
@@ -57,6 +61,8 @@ app/
 │       ├── studyfloat.lua       # 极简 OSC 配置
 │       └── input.conf           # 快捷键绑定
 ├── ui/
+│   ├── theme.py                 # 设计令牌（色板 / 字阶 / 圆角 / 基础 QSS）
+│   ├── widgets.py               # 品牌标 / 开关 / 分段 / 滑杆等共用控件
 │   ├── launcher.py              # 启动器（播放 / 设置 / 扫码登录）
 │   ├── settings_dialog.py       # 设置窗口
 │   ├── qr_login_dialog.py       # 扫码登录窗口（QPainter 绘制二维码）
@@ -67,8 +73,10 @@ tools/
 ├── parse_probe.py               # 验证 A：解析探测
 ├── ipc_probe.py                 # 验证 C：IPC 探测
 ├── smoke_e2e.py                 # 端到端冒烟测试
+├── slim_build.py                # 打包后精简 Qt 运行时
+├── package.py                   # 生成绿色版 .7z 发行包
 └── check_browser_cookies.py / test_cookiesfrombrowser.py  # Cookie 诊断记录
-tests/                           # 41 个 pytest 测试
+tests/                           # 51 个 pytest 测试
 docs/                            # 设计、计划、功能清单、验证记录
 build.spec                       # PyInstaller 打包配置（含瘦身）
 ```
@@ -77,15 +85,15 @@ build.spec                       # PyInstaller 打包配置（含瘦身）
 
 ### 运行绿色版（推荐，无需开发环境）
 
-1. 进入 `dist/StudyFloat_v4` 文件夹。
-2. 双击 `StudyFloat_v4.exe`。
+1. 进入 `dist/StudyFloat_v8` 文件夹。
+2. 双击 `StudyFloat_v8.exe`。
 3. 首次使用点击「扫码登录」用手机 B站 App 扫码（公开视频免登录也可播放）。
 4. 粘贴 Bilibili 视频链接或 BV 号，点击「播放」：
    - 课程合辑（不管链接带不带 `p`）都会弹出分P列表；链接里原有的那一P会默认高亮，选中后播放。
    - 单P视频直接播放。
 5. 播放窗口默认无边框、置顶；鼠标移到画面上显示控制条，约 2 秒后自动隐藏。
 
-> 注意：旧目录 `dist/StudyFloat`、`dist/StudyFloat_v2` 是历史版本（且被 Windows 句柄锁定无法删除），请认准 **v3**。历史目录里的 `qr_cookies.txt` 已失效，v3 需重新扫码一次。
+> 注意：项目目录只保留最新的 `StudyFloat_v8` 绿色版；v1～v7 历史目录已清理。首次使用或升级后建议重新扫码登录一次。
 
 ### 开发运行
 
@@ -107,7 +115,9 @@ py -m venv .venv
 
 ```powershell
 .\.venv\Scripts\python.exe -m PyInstaller build.spec --noconfirm
-# 输出：dist/StudyFloat_v4/（整个文件夹即绿色版，APP_NAME 在 build.spec 中修改）
+.\.venv\Scripts\python.exe tools\slim_build.py --name StudyFloat_v8
+.\.venv\Scripts\python.exe tools\package.py --name StudyFloat_v8
+# 输出：dist/StudyFloat_v8/（整个文件夹即绿色版，APP_NAME 在 build.spec 中修改）
 ```
 
 ## 登录与 Cookie
@@ -146,7 +156,7 @@ B站课程通常是合辑，`p=N` 表示第 N 个分P：
 2. **直链过期**：B站签名直链数小时后失效；每次播放都重新解析，播放中失效则关闭重开。
 3. **平台风控**：可能遇到 HTTP 412 / WBI 变更；保持 yt-dlp 更新或提供真实 Cookie，错误会显示简洁中文提示。
 4. **杀毒误报**：PyInstaller 与 mpv.exe 未签名，可能被误报；加白名单即可。
-5. **绿色版体积**：约 217MB，其中 mpv.exe 独占约 117MB（静态编译、内置 FFmpeg 与全编解码器，是“真播放”的必要成本），其余为 Python 运行时 + Qt Widgets + yt-dlp。已从初版 810MB 精简掉未使用的 Qt WebEngine / Qml / Quick 模块。
+5. **绿色版体积**：约 210MB，其中 mpv.exe 独占约 117.6MB（静态编译、内置 FFmpeg 与全编解码器，是“真播放”的必要成本），其余为 Python 运行时 + Qt Widgets + yt-dlp。已从初版 810MB 精简掉未使用的 Qt WebEngine / Qml / Quick 模块。
 6. **IPC 死锁历史**：Windows 命名管道 + 后台读线程 + 管道关闭曾导致 `command()` 卡死；现改为同步「写一帧、读到匹配 request_id」并 `quit` 后再关管道，stdout/stderr 置 `DEVNULL`，已稳定。
 7. **无自定义右键菜单 / 系统托盘**：P0 用快捷键 + 设置窗口提供等价操作，播放后启动器最小化；完整右键菜单与托盘常驻属于 P1。
 8. **无自定义快捷键配置 UI**：当前绑定写在 `input.conf`，可视化配置属于 P1。

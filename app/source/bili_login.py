@@ -30,6 +30,10 @@ class LoginExpired(Exception):
     """二维码已过期，需要重新生成。"""
 
 
+class LoginCancelled(Exception):
+    """用户关闭了扫码窗口；后台线程应立即退出，不再轮询。"""
+
+
 @dataclass
 class LoginResult:
     cookies: dict[str, str] = field(default_factory=dict)
@@ -42,29 +46,42 @@ class BiliQRLogin:
         self._session = cffi_requests.Session(impersonate=impersonate)
         self._session.headers.update({"User-Agent": _UA})
 
-    def _get(self, url: str, **kwargs) -> Any:
-        """带重试的 GET。passport 接口对网络抖动敏感，重试可恢复。"""
+    def _get(self, url: str, stop_event=None, **kwargs) -> Any:
+        """带重试的 GET。passport 接口对网络抖动敏感，重试可恢复。
+
+        stop_event 用于用户取消：轮询/重试期间也能尽快退出，避免关闭窗口
+        后登录线程还长时间阻塞，拖住 QThread 的销毁。
+        """
         last_exc = None
         for attempt in range(3):
+            if stop_event is not None and stop_event.is_set():
+                raise LoginCancelled()
             try:
                 return self._session.get(url, timeout=15, **kwargs)
             except Exception as exc:
+                if stop_event is not None and stop_event.is_set():
+                    raise LoginCancelled() from exc
                 last_exc = exc
                 if attempt < 2:
-                    time.sleep(0.8 * (attempt + 1))
+                    delay = 0.8 * (attempt + 1)
+                    if stop_event is not None:
+                        if stop_event.wait(delay):
+                            raise LoginCancelled()
+                    else:
+                        time.sleep(delay)
         raise RuntimeError(f"网络连接失败，请稍后重试（{type(last_exc).__name__})") from last_exc
 
-    def generate_qr(self) -> tuple[str, str]:
+    def generate_qr(self, stop_event=None) -> tuple[str, str]:
         """返回 (二维码内容 url, qrcode_key)。"""
-        resp = self._get(GENERATE_URL)
+        resp = self._get(GENERATE_URL, stop_event=stop_event)
         data = resp.json()
         if data.get("code") != 0 or not data.get("data"):
             raise RuntimeError(data.get("message") or "获取二维码失败")
         return data["data"]["url"], data["data"]["qrcode_key"]
 
-    def poll(self, qrcode_key: str) -> LoginResult:
+    def poll(self, qrcode_key: str, stop_event=None) -> LoginResult:
         """轮询一次扫码状态。成功返回 LoginResult，否则抛出 Pending/Expired。"""
-        resp = self._get(POLL_URL, params={"qrcode_key": qrcode_key})
+        resp = self._get(POLL_URL, stop_event=stop_event, params={"qrcode_key": qrcode_key})
         data = (resp.json() or {}).get("data") or {}
         code = data.get("code")
         if code == 0:
@@ -76,28 +93,50 @@ class BiliQRLogin:
         raise LoginPending(data.get("message") or "等待扫码")
 
     def login(self, on_qr, on_status=None, timeout: float = 180.0,
-              interval: float = 2.0) -> LoginResult:
+              interval: float = 2.0, stop_event=None) -> LoginResult:
         """完整登录流程：生成二维码 → 回调显示 → 轮询直到成功/超时。
 
         on_qr(url) 用于展示二维码；on_status(message) 用于显示状态（可选）。
+        stop_event 由窗口关闭时置位，登录线程会抛 LoginCancelled 立即退出。
         """
-        url, key = self.generate_qr()
+        if stop_event is not None and stop_event.is_set():
+            raise LoginCancelled()
+        url, key = self.generate_qr(stop_event=stop_event)
         on_qr(url)
         deadline = time.time() + timeout
         while time.time() < deadline:
-            time.sleep(interval)
+            if stop_event is not None:
+                if stop_event.wait(interval):
+                    raise LoginCancelled()
+            else:
+                time.sleep(interval)
             try:
-                return self.poll(key)
+                return self.poll(key, stop_event=stop_event)
             except LoginPending as exc:
                 if on_status:
                     on_status(str(exc))
             except LoginExpired:
                 # 过期则重新生成一次二维码，给用户新的机会
-                url, key = self.generate_qr()
+                url, key = self.generate_qr(stop_event=stop_event)
                 on_qr(url)
                 if on_status:
                     on_status("二维码已刷新，请重新扫码")
         raise TimeoutError("扫码超时，请重试")
+
+    def close(self) -> None:
+        """在创建 session 的线程里关闭 curl 会话。
+
+        curl_cffi 的 Curl 对象如果留给 ``__del__``，会在 Python 线程退出时
+        于 GC/关闭阶段调用 curl_easy_cleanup；跨线程析构轻则日志报错，重则
+        原生崩溃。这里显式关闭，确保线程结束前资源已释放。
+        """
+        session = getattr(self, "_session", None)
+        self._session = None
+        if session is not None:
+            try:
+                session.close()
+            except Exception:
+                pass
 
 
 def cookies_to_netscape(cookies: dict[str, str], path: str | Path) -> None:
